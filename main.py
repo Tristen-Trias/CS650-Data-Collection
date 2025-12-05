@@ -14,11 +14,6 @@ def initialize_reddit_client():
         user_agent = "CS650 Research Project - CSUSM",
     )
 
-def convert_dates_to_timestamps(start_date, end_date):
-    start_timestamp = int(start_date.timestamp())
-    end_timestamp = int(end_date.timestamp())
-    return start_timestamp, end_timestamp
-
 def is_post_in_date_range(post_timestamp, start_timestamp, end_timestamp):
     return start_timestamp <= post_timestamp <= end_timestamp
 
@@ -38,7 +33,6 @@ def extract_comment_data(comment):
     except Exception as e:
         print(f"    Error extracting comment data: {e}")
         return None
-
 
 def collect_post_comments(post, max_comments=None):
     comments_data = []
@@ -62,251 +56,118 @@ def collect_post_comments(post, max_comments=None):
     
     return comments_data
 
-
-def calculate_engagement_metrics(post):
-    try:
-        unique_commenters = set()
-        for comment in post.comments.list():
-            if comment.author != "[deleted]" and comment.author != "AutoModerator" and comment.author:
-                unique_commenters.add(comment.author.name)
-        
-        return {
-            "num_comments": post.num_comments,
-            "upvote_ratio": post.upvote_ratio,
-            "post_status": "removed" if post.removed_by_category else "active",
-            "unique_comments": len(unique_commenters),
-            "gilded": post.gilded if hasattr(post, 'gilded') else 0,
-        }
-    except Exception as e:
-        print(f"    Error calculating engagement: {e}")
-        return {
-            "num_comments": post.num_comments,
-            "upvote_ratio": post.upvote_ratio,
-            "post_status": "unknown",
-            "unique_comments": 0,
-            "gilded": 0,
-        }
-
-def track_outcome_metrics(post):
-    try:
-        op_name = post.author.name if post.author else ""
-        op_comments = []
-        
-        for comment in post.comments.list():
-            if comment.author and comment.author.name == op_name:
-                op_comments.append(comment)
-        
-        op_evidence = False
-        for comment in op_comments:
-            if any(keyword in comment.body.lower() for keyword in 
-                   ["screenshot", "image", "photo", "http", "www.", "pic"]):
-                op_evidence = True
-                break
-        
-        thread_solved = False
-        if post.link_flair_text:
-            thread_solved = any(keyword in post.link_flair_text.lower() 
-                              for keyword in ["solved", "resolved", "answered"])
-        
-        return {
-            "final_status": "solved" if thread_solved else "unknown",
-            "thread_marked_solved": thread_solved,
-            "op_total_comments": len(op_comments),
-            "op_evidence": op_evidence,
-            "post_edits": bool(post.edited),
-            "post_edited_times": post.edited if isinstance(post.edited, (int, float)) else 0,
-        }
-    except Exception as e:
-        print(f"    Error tracking outcomes: {e}")
-        return {
-            "final_status": "unknown",
-            "thread_marked_solved": False,
-            "op_total_comments": 0,
-            "op_evidence": False,
-            "post_edits": False,
-            "post_edited_times": 0,
-        }
-
-
-def extract_content_metadata(post):
-    try:
-        selftext = post.selftext if post.selftext else ""
-        
-        return {
-            "url": post.url,
-            "contains_images": any(
-                ext in post.url.lower()
-                for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]
-            ),
-            "contains_links": "http" in selftext.lower() or "www." in selftext.lower(),
-            "post_length": len(selftext),
-            "has_selftext": bool(selftext),
-        }
-    except Exception as e:
-        print(f"    Error extracting content metadata: {e}")
-        return {
-            "url": post.url if hasattr(post, 'url') else "",
-            "contains_images": False,
-            "contains_links": False,
-            "post_length": 0,
-            "has_selftext": False,
-        }
-
-
 def get_post_data(post, keyword, comments_data):
-    engagement = calculate_engagement_metrics(post)
-    outcome_tracking = track_outcome_metrics(post)
-    content_metadata = extract_content_metadata(post)
     
     post_data = {
         "id": post.id,
-        "subreddit": post.subreddit.display_name,
         "title": post.title,
-        "selftext": post.selftext if post.selftext else "",
-        "created_utc": post.created_utc,
-        "author": post.author.name if post.author else None,
-        "flair": post.link_flair_text,
+        "body": post.selftext if post.selftext else "",
+        "post_created_utc": post.created_utc,
+        "post_year": datetime.fromtimestamp(post.created_utc).year,
+        "post_month": datetime.fromtimestamp(post.created_utc).month,
+        "post_day": datetime.fromtimestamp(post.created_utc).day,
+        "post_hour": datetime.fromtimestamp(post.created_utc).hour,
+        "post_day_of_week": datetime.fromtimestamp(post.created_utc).strftime("%A"),
+        "upvotes": post.score,
+        "num_comments": post.num_comments,
         "url": post.url,
-        "score": post.score,
-        "matched_keyword": keyword,
-        "permalink": f"https://reddit.com{post.permalink}",
-        "engagement": engagement,
-        "outcome_tracking": outcome_tracking,
-        "content_metadata": content_metadata,
-        "comments": comments_data,
-        "num_comments_collected": len(comments_data),
+        "selfPost": post.is_self,        
+        "author": post.author.name if post.author else None,
+        "permalink": post.permalink,
+        "flair": post.link_flair_text,
+        "domain": post.domain,
+        "guilded": post.gilded if hasattr(post, 'gilded') else 0,
+        "total_awards": post.total_awards_received,
+        "post_distinguished": post.distinguished,
+        "edited": post.edited,
+        "archived": post.archived,
+        "locked": post.locked,
+        "removed": post.removed_by_category if post.removed_by_category else None,
+        "thumbnail": post.thumbnail if post.thumbnail else None,
     }
     
+    # add comments data
+    post_data["comments"] = comments_data
+    
     return post_data
-
-
-def search_subreddit_with_keyword(subreddit, keyword, start_timestamp, end_timestamp, 
-                                   seen_post_ids, max_posts=100, max_comments=None):
     
-    posts_data = []
+def gather_all_posts_in_daterange(subreddit_name, start_timestamp, 
+                                   end_timestamp, max_posts=1000, divide_num=100,
+                                   max_comments_per_post=None, sort_by='new'):
     
-    try:
-        search_results = subreddit.search(
-            keyword,
-            sort='new',
-            time_filter='all',
-            limit=max_posts
-        )
-        
-        for post in search_results:
-            post_timestamp = int(post.created_utc)
-            
-            if is_post_in_date_range(post_timestamp, start_timestamp, end_timestamp):
-                if post.id not in seen_post_ids:
-                    seen_post_ids.add(post.id)
-                    
-                    comments_data = collect_post_comments(post, max_comments)
-                    
-                    post_data = get_post_data(post, keyword, comments_data)
-                    posts_data.append(post_data)
+    print(f"\n--- Gathering all posts from r/{subreddit_name} ---")
+    print(f"    Date range: {datetime.fromtimestamp(start_timestamp)} to {datetime.fromtimestamp(end_timestamp)}")
     
-    except Exception as e:
-        print(f"    Error searching with keyword '{keyword}': {e}")
+    reddit = initialize_reddit_client()
     
-    return posts_data
-
-
-def search_single_subreddit(reddit, subreddit_name, keywords, start_timestamp, 
-                            end_timestamp, seen_post_ids, max_posts_per_search=100,
-                            max_comments_per_post=None):
-    
-    print(f"\n--- Searching r/{subreddit_name} ---")
-    subreddit_posts = []
+    all_posts = []
     
     try:
         subreddit = reddit.subreddit(subreddit_name)
         
-        for keyword in keywords:
-            print(f"  Keyword: '{keyword}'")
+        # Choose the appropriate listing method
+        if sort_by == 'new':
+            listing = subreddit.new(limit=max_posts)
+        elif sort_by == 'hot':
+            listing = subreddit.hot(limit=max_posts)
+        elif sort_by == 'top':
+            listing = subreddit.top(time_filter='all', limit=max_posts)
+        elif sort_by == 'controversial':
+            listing = subreddit.controversial(time_filter='all', limit=max_posts)
+        else:
+            listing = subreddit.new(limit=max_posts)
+        
+        posts_in_range = 0
+        posts_checked = 0
+        # json_num_check = 0
+        # numFiles = 1
+        
+        for post in listing:
+            posts_checked += 1
+            post_timestamp = int(post.created_utc)
             
-            posts = search_subreddit_with_keyword(
-                subreddit, keyword, start_timestamp, end_timestamp,
-                seen_post_ids, max_posts_per_search, max_comments_per_post
-            )
+            # Check if post is within date range
+            if is_post_in_date_range(post_timestamp, start_timestamp, end_timestamp):
+                # Collect comments
+                comments_data = collect_post_comments(post, max_comments_per_post)
+                
+                # Extract post data with all metrics (no keyword needed)
+                post_data = get_post_data(post, keyword="all_posts", comments_data=comments_data)
+                all_posts.append(post_data)
+                posts_in_range += 1
+                # json_num_check += 1
+                
+                if posts_in_range % 100 == 0:
+                    print(f"    Collected {posts_in_range} posts so far...")
             
-            subreddit_posts.extend(posts)
-            print(f"    Found {len(posts)} new posts")
+            # Early exit if we're past the date range (only works with 'new' sort)
+            elif sort_by == 'new' and post_timestamp < start_timestamp:
+                print(f"    Reached posts before start date, stopping search")
+                break
             
-            time.sleep(2)  # Rate limiting
+            # if json_num_check >= divide_num:
+            #     json_file = open(f"data/{subreddit_name}_all_posts{numFiles}.json", "a", encoding='utf-8')
+            #     json.dump(all_posts, json_file, indent=4)
+            #     json_file.write("\n")
+            #     json_file.close()
+            #     json_num_check = 0
+            #     numFiles += 1
+            #     print(f"    ✓ Saved {len(all_posts)} posts to JSON so far.")
+            #     all_posts = []
+        
+        print(f"    ✓ Total posts checked: {posts_checked}")
+        print(f"    ✓ Posts in date range: {len(all_posts)}")
     
     except Exception as e:
         print(f"Error accessing r/{subreddit_name}: {e}")
-    
-    return subreddit_posts
-
-
-def create_metadata(start_date, end_date, subreddits, keywords, total_posts):
-    return {
-        "search_date": datetime.now().isoformat(),
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "subreddits": subreddits,
-        "keywords": keywords,
-        "total_posts_collected": total_posts,
-        "total_subreddits_searched": len(subreddits),
-        "total_keywords_searched": len(keywords)
-    }
-
-
-def save_to_json(data, output_file):
-    try:
-        with open(output_file, 'a', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-        print(f"\n✓ Saved to: {output_file}")
-        return True
-    except Exception as e:
-        print(f"\n✗ Error saving file: {e}")
-        return False
-
-
-def print_search_summary(total_posts, subreddits, keywords):
-    print(f"\n{'='*50}")
-    print(f"SEARCH COMPLETE")
-    print(f"{'='*50}")
-    print(f"✓ Total posts collected: {total_posts}")
-    print(f"✓ Subreddits searched: {len(subreddits)}")
-    print(f"✓ Keywords used: {len(keywords)}")
-    print(f"{'='*50}")
-
-
-def search_subreddits(subreddits, keywords, start_date, end_date, 
-                     max_posts_per_search=100, max_comments_per_post=None):
-    print(f"Starting Reddit search...")
-    print(f"Subreddits: {', '.join(subreddits)}")
-    print(f"Keywords: {len(keywords)}")
-    print(f"Date range: {start_date.date()} to {end_date.date()}")
-    
-    reddit = initialize_reddit_client()
-    
-    start_timestamp, end_timestamp = convert_dates_to_timestamps(start_date, end_date)
-    
-    seen_post_ids = set()
-    
-    total_posts_collected = 0
-
-    for subreddit_name in subreddits:
-        all_posts = []
-        json_file = open(f"data/{subreddit_name}_posts.json", "a", encoding='utf-8')
         
-        posts = search_single_subreddit(
-            reddit, subreddit_name, keywords, start_timestamp,
-            end_timestamp, seen_post_ids, max_posts_per_search,
-            max_comments_per_post
-        )
-        
-        all_posts.extend(posts)
-        json.dump(all_posts, json_file, indent=4)
-        json_file.write("\n")
-        json_file.close()
-        time.sleep(5) 
-        total_posts_collected += len(all_posts)
+    json_file = open(f"data/{subreddit_name}_all_posts.json", "a", encoding='utf-8')
+    json.dump(all_posts, json_file, indent=4)
+    json_file.write("\n")
+    json_file.close()
+    time.sleep(5) 
     
-    print_search_summary(total_posts_collected, subreddits, keywords)
+    return all_posts
 
 
 if __name__ == "__main__":
@@ -318,28 +179,18 @@ if __name__ == "__main__":
         file_path = os.path.join("data", file)
         if os.path.isfile(file_path):
             os.remove(file_path)
-    
-    q1_subreddits = ["malware", "phishing", "scams", "cybersecurity", "jobs", "personalfinance"]
-    
-    # q2_subreddits = ["cryptocurrency", "relationship_advice", "dating_advice"]
-    
-    keywords = [
-        "is this a scam",
-        "is this legit",
-        "is this real",
-        "sounds like a scam",
-        "seems suspicious",
-        "too good to be true",
-    ]
-    
+
+    # Define date range: last 15 years from 31-Oct-2025 to 1-Jan-2011    
+    start = datetime(2011, 1, 1)
+    # end = datetime(2025, 10, 31)
     end = datetime.now()
-    start = end - timedelta(days=3*365)
     
-    data = search_subreddits(
-        subreddits=q1_subreddits,
-        keywords=keywords,
-        start_date=start,
-        end_date=end,
-        max_posts_per_search=5000, 
-        max_comments_per_post=50
+    data = gather_all_posts_in_daterange(
+        subreddit_name="phishing",
+        start_timestamp=int(start.timestamp()),
+        end_timestamp=int(end.timestamp()),
+        max_posts=100000,
+        max_comments_per_post=50,
+        sort_by='new',
+        divide_num=200
     )
